@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Baseline Rally</title>
+    <style>
+      :root {
+        --night: #0b1628;
+        --dawn: #153b49;
+        --court: #1f7a5b;
+        --line: #e9f5e2;
+        --accent: #f6c667;
+        --accent-2: #ff7f50;
+        --ink: #f6f3ea;
+        --shadow: rgba(9, 12, 20, 0.4);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(900px 500px at 85% 15%, rgba(255, 255, 255, 0.08), transparent 65%),
+          linear-gradient(130deg, var(--night), var(--dawn));
+        color: var(--ink);
+        font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+        letter-spacing: 0.4px;
+      }
+
+      .frame {
+        width: min(980px, 92vw);
+        padding: 22px;
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+        box-shadow: 0 30px 60px var(--shadow);
+        backdrop-filter: blur(8px);
+        animation: settle 0.65s ease-out;
+      }
+
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: clamp(26px, 5vw, 42px);
+        font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", sans-serif;
+      }
+
+      .hud {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        flex-wrap: wrap;
+        font-weight: 600;
+      }
+
+      .chip {
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.28);
+        font-size: 13px;
+      }
+
+      .score {
+        color: var(--accent);
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .court {
+        border-radius: 18px;
+        overflow: hidden;
+        border: 2px solid rgba(255, 255, 255, 0.14);
+        background:
+          linear-gradient(180deg, rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0)),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          var(--court);
+        background-size: auto, 38px 38px, auto;
+      }
+
+      canvas {
+        width: 100%;
+        height: 60vh;
+        display: block;
+      }
+
+      .legend {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 10px 18px;
+        font-size: 14px;
+        opacity: 0.92;
+        animation: rise 0.6s ease-out 0.2s both;
+      }
+
+      .legend strong {
+        color: var(--accent-2);
+      }
+
+      @keyframes settle {
+        from {
+          opacity: 0;
+          transform: translateY(18px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <header>
+        <h1>Baseline Rally</h1>
+        <div class="hud">
+          <div class="chip">Mode: <span id="mode">1P</span></div>
+          <div class="chip">Target: 7</div>
+          <div class="score" id="score">0 : 0</div>
+        </div>
+      </header>
+      <div class="court">
+        <canvas id="game" width="900" height="520" aria-label="Tennis game"></canvas>
+      </div>
+      <div class="legend">
+        <div><strong>Left</strong>: W / S</div>
+        <div><strong>Right</strong>: Up / Down (2P)</div>
+        <div><strong>Space</strong>: Serve / Pause</div>
+        <div><strong>R</strong>: Reset match</div>
+        <div><strong>P</strong>: Toggle AI</div>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+      const scoreEl = document.getElementById("score");
+      const modeEl = document.getElementById("mode");
+
+      const state = {
+        running: false,
+        leftScore: 0,
+        rightScore: 0,
+        targetScore: 7,
+        aiEnabled: true,
+        lastTime: 0,
+      };
+
+      const paddles = {
+        left: { x: 40, y: 0, w: 14, h: 90, speed: 430, dy: 0 },
+        right: { x: 0, y: 0, w: 14, h: 90, speed: 430, dy: 0 },
+      };
+
+      const ball = {
+        x: 0,
+        y: 0,
+        r: 10,
+        speed: 360,
+        dx: 1,
+        dy: 0,
+      };
+
+      const keys = new Set();
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = rect.width * ratio;
+        canvas.height = rect.height * ratio;
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        paddles.right.x = rect.width - 54;
+        paddles.left.y = rect.height / 2 - paddles.left.h / 2;
+        paddles.right.y = rect.height / 2 - paddles.right.h / 2;
+        resetBall(Math.random() > 0.5 ? 1 : -1);
+      }
+
+      function resetBall(dir) {
+        const rect = canvas.getBoundingClientRect();
+        ball.x = rect.width / 2;
+        ball.y = rect.height / 2;
+        ball.speed = 360;
+        const angle = (Math.random() * 0.6 - 0.3) * Math.PI;
+        ball.dx = Math.cos(angle) * dir;
+        ball.dy = Math.sin(angle);
+      }
+
+      function resetMatch() {
+        state.leftScore = 0;
+        state.rightScore = 0;
+        state.running = false;
+        updateScore();
+        resetBall(Math.random() > 0.5 ? 1 : -1);
+      }
+
+      function updateScore() {
+        scoreEl.textContent = `${state.leftScore} : ${state.rightScore}`;
+      }
+
+      function handleInput(delta) {
+        paddles.left.dy = 0;
+        paddles.right.dy = 0;
+
+        if (keys.has("KeyW")) paddles.left.dy -= paddles.left.speed;
+        if (keys.has("KeyS")) paddles.left.dy += paddles.left.speed;
+
+        if (!state.aiEnabled) {
+          if (keys.has("ArrowUp")) paddles.right.dy -= paddles.right.speed;
+          if (keys.has("ArrowDown")) paddles.right.dy += paddles.right.speed;
+        } else {
+          const target = ball.y - paddles.right.h / 2;
+          const diff = target - paddles.right.y;
+          const move = clamp(diff, -paddles.right.speed * delta, paddles.right.speed * delta);
+          paddles.right.y += move;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        paddles.left.y = clamp(
+          paddles.left.y + paddles.left.dy * delta,
+          14,
+          rect.height - paddles.left.h - 14
+        );
+        paddles.right.y = clamp(
+          paddles.right.y + paddles.right.dy * delta,
+          14,
+          rect.height - paddles.right.h - 14
+        );
+      }
+
+      function handleCollisions(delta) {
+        const rect = canvas.getBoundingClientRect();
+        ball.x += ball.dx * ball.speed * delta;
+        ball.y += ball.dy * ball.speed * delta;
+
+        if (ball.y - ball.r <= 12 || ball.y + ball.r >= rect.height - 12) {
+          ball.dy *= -1;
+          ball.y = clamp(ball.y, 12 + ball.r, rect.height - 12 - ball.r);
+        }
+
+        const left = paddles.left;
+        const right = paddles.right;
+
+        if (
+          ball.x - ball.r <= left.x + left.w &&
+          ball.y + ball.r >= left.y &&
+          ball.y - ball.r <= left.y + left.h
+        ) {
+          const hit = (ball.y - (left.y + left.h / 2)) / (left.h / 2);
+          const angle = hit * 0.9;
+          ball.dx = Math.cos(angle);
+          ball.dy = Math.sin(angle);
+          ball.speed = Math.min(ball.speed + 18, 660);
+          ball.x = left.x + left.w + ball.r;
+        }
+
+        if (
+          ball.x + ball.r >= right.x &&
+          ball.y + ball.r >= right.y &&
+          ball.y - ball.r <= right.y + right.h
+        ) {
+          const hit = (ball.y - (right.y + right.h / 2)) / (right.h / 2);
+          const angle = Math.PI - hit * 0.9;
+          ball.dx = Math.cos(angle);
+          ball.dy = Math.sin(angle);
+          ball.speed = Math.min(ball.speed + 18, 660);
+          ball.x = right.x - ball.r;
+        }
+
+        if (ball.x < -40) {
+          state.rightScore += 1;
+          updateScore();
+          state.running = false;
+          resetBall(1);
+        }
+
+        if (ball.x > rect.width + 40) {
+          state.leftScore += 1;
+          updateScore();
+          state.running = false;
+          resetBall(-1);
+        }
+      }
+
+      function drawCourt() {
+        const rect = canvas.getBoundingClientRect();
+        ctx.clearRect(0, 0, rect.width, rect.height);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(233, 245, 226, 0.6)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 10]);
+        ctx.beginPath();
+        ctx.moveTo(rect.width / 2, 18);
+        ctx.lineTo(rect.width / 2, rect.height - 18);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.strokeStyle = "rgba(233, 245, 226, 0.8)";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(14, 14, rect.width - 28, rect.height - 28);
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+        ctx.fillRect(rect.width / 2 - 2, 24, 4, rect.height - 48);
+      }
+
+      function drawPaddle(paddle) {
+        ctx.fillStyle = "rgba(246, 243, 234, 0.93)";
+        ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+        ctx.shadowBlur = 6;
+        ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+        ctx.shadowBlur = 0;
+      }
+
+      function drawBall() {
+        ctx.fillStyle = "#f6c667";
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawOverlay() {
+        if (state.running) return;
+        const rect = canvas.getBoundingClientRect();
+        ctx.save();
+        ctx.fillStyle = "rgba(11, 22, 40, 0.55)";
+        ctx.fillRect(0, 0, rect.width, rect.height);
+        ctx.fillStyle = "#f6f3ea";
+        ctx.textAlign = "center";
+        ctx.font = "700 26px 'Trebuchet MS', sans-serif";
+        const message =
+          state.leftScore >= state.targetScore || state.rightScore >= state.targetScore
+            ? state.leftScore > state.rightScore
+              ? "Left wins! Press R"
+              : "Right wins! Press R"
+            : "Press Space to Serve";
+        ctx.fillText(message, rect.width / 2, rect.height / 2);
+        ctx.restore();
+      }
+
+      function loop(timestamp) {
+        const delta = Math.min((timestamp - state.lastTime) / 1000, 0.03);
+        state.lastTime = timestamp;
+
+        if (state.running) {
+          handleInput(delta);
+          handleCollisions(delta);
+        }
+
+        drawCourt();
+        drawPaddle(paddles.left);
+        drawPaddle(paddles.right);
+        drawBall();
+        drawOverlay();
+
+        if (state.leftScore >= state.targetScore || state.rightScore >= state.targetScore) {
+          state.running = false;
+        }
+
+        requestAnimationFrame(loop);
+      }
+
+      window.addEventListener("keydown", (event) => {
+        keys.add(event.code);
+        if (event.code === "Space") {
+          if (
+            state.leftScore < state.targetScore &&
+            state.rightScore < state.targetScore
+          ) {
+            state.running = !state.running;
+          }
+        }
+        if (event.code === "KeyR") resetMatch();
+        if (event.code === "KeyP") {
+          state.aiEnabled = !state.aiEnabled;
+          modeEl.textContent = state.aiEnabled ? "1P" : "2P";
+        }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.code);
+      });
+
+      window.addEventListener("resize", resize);
+
+      resize();
+      resetMatch();
+      requestAnimationFrame(loop);
+    </script>
+  </body>
+</html>
