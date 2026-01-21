@@ -159,6 +159,8 @@
         <div><strong>M</strong>: Toggle sound</div>
       </div>
     </div>
+    <!-- Original free loop included in assets/bgm-free.wav -->
+    <audio id="bgm" src="assets/bgm-free.wav" loop preload="auto"></audio>
 
     <script>
       const canvas = document.getElementById("game");
@@ -166,6 +168,7 @@
       const scoreEl = document.getElementById("score");
       const modeEl = document.getElementById("mode");
       const soundEl = document.getElementById("sound");
+      const bgmEl = document.getElementById("bgm");
 
       const state = {
         running: false,
@@ -194,17 +197,7 @@
       const keys = new Set();
       const audio = {
         ctx: null,
-        master: null,
-        bgmGain: null,
         sfxGain: null,
-        step: 0,
-        timer: null,
-        sequence: [
-          [261.63, 329.63, 392.0],
-          [246.94, 311.13, 369.99],
-          [233.08, 293.66, 349.23],
-          [246.94, 311.13, 369.99],
-        ],
       };
 
       function clamp(value, min, max) {
@@ -253,60 +246,36 @@
         if (audio.ctx) return;
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audio.ctx = new AudioContext();
-        audio.master = audio.ctx.createGain();
-        audio.master.gain.value = 0.6;
-        audio.master.connect(audio.ctx.destination);
-
-        audio.bgmGain = audio.ctx.createGain();
-        audio.bgmGain.gain.value = 0.12;
-        audio.bgmGain.connect(audio.master);
-
         audio.sfxGain = audio.ctx.createGain();
         audio.sfxGain.gain.value = 0.7;
-        audio.sfxGain.connect(audio.master);
-
-        startBgm();
+        audio.sfxGain.connect(audio.ctx.destination);
       }
 
       function unlockAudio() {
-        if (!state.audioEnabled) return;
         ensureAudio();
         if (audio.ctx && audio.ctx.state === "suspended") {
           audio.ctx.resume();
         }
-      }
-
-      function startBgm() {
-        if (audio.timer) return;
-        audio.timer = setInterval(() => {
-          if (!state.audioEnabled || !audio.ctx) return;
-          const now = audio.ctx.currentTime;
-          const notes = audio.sequence[audio.step % audio.sequence.length];
-          notes.forEach((note, index) => {
-            const osc = audio.ctx.createOscillator();
-            const gain = audio.ctx.createGain();
-            osc.type = "sine";
-            osc.frequency.value = note;
-            gain.gain.setValueAtTime(0.0001, now);
-            gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03);
-            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
-            osc.connect(gain).connect(audio.bgmGain);
-            osc.start(now + index * 0.02);
-            osc.stop(now + 0.75);
-          });
-          audio.step += 1;
-        }, 720);
+        if (state.audioEnabled) {
+          const promise = bgmEl.play();
+          if (promise && typeof promise.catch === "function") {
+            promise.catch(() => {});
+          }
+        }
       }
 
       function setAudioEnabled(enabled) {
         state.audioEnabled = enabled;
         updateSoundLabel();
         if (!state.audioEnabled) {
-          if (audio.master) audio.master.gain.value = 0;
+          bgmEl.pause();
           return;
         }
         ensureAudio();
-        if (audio.master) audio.master.gain.value = 0.6;
+        const promise = bgmEl.play();
+        if (promise && typeof promise.catch === "function") {
+          promise.catch(() => {});
+        }
       }
 
       function playHitSound(strength) {
@@ -518,6 +487,7 @@
 
       resize();
       updateSoundLabel();
+      bgmEl.volume = 0.32;
       resetMatch();
       requestAnimationFrame(loop);
     </script>
