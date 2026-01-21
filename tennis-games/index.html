@@ -143,6 +143,7 @@
         <div class="hud">
           <div class="chip">Mode: <span id="mode">1P</span></div>
           <div class="chip">Target: 7</div>
+          <div class="chip">Sound: <span id="sound">On</span></div>
           <div class="score" id="score">0 : 0</div>
         </div>
       </header>
@@ -155,6 +156,7 @@
         <div><strong>Space</strong>: Serve / Pause</div>
         <div><strong>R</strong>: Reset match</div>
         <div><strong>P</strong>: Toggle AI</div>
+        <div><strong>M</strong>: Toggle sound</div>
       </div>
     </div>
 
@@ -163,6 +165,7 @@
       const ctx = canvas.getContext("2d");
       const scoreEl = document.getElementById("score");
       const modeEl = document.getElementById("mode");
+      const soundEl = document.getElementById("sound");
 
       const state = {
         running: false,
@@ -170,6 +173,7 @@
         rightScore: 0,
         targetScore: 7,
         aiEnabled: true,
+        audioEnabled: true,
         lastTime: 0,
       };
 
@@ -188,6 +192,20 @@
       };
 
       const keys = new Set();
+      const audio = {
+        ctx: null,
+        master: null,
+        bgmGain: null,
+        sfxGain: null,
+        step: 0,
+        timer: null,
+        sequence: [
+          [261.63, 329.63, 392.0],
+          [246.94, 311.13, 369.99],
+          [233.08, 293.66, 349.23],
+          [246.94, 311.13, 369.99],
+        ],
+      };
 
       function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -225,6 +243,87 @@
 
       function updateScore() {
         scoreEl.textContent = `${state.leftScore} : ${state.rightScore}`;
+      }
+
+      function updateSoundLabel() {
+        soundEl.textContent = state.audioEnabled ? "On" : "Off";
+      }
+
+      function ensureAudio() {
+        if (audio.ctx) return;
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audio.ctx = new AudioContext();
+        audio.master = audio.ctx.createGain();
+        audio.master.gain.value = 0.6;
+        audio.master.connect(audio.ctx.destination);
+
+        audio.bgmGain = audio.ctx.createGain();
+        audio.bgmGain.gain.value = 0.12;
+        audio.bgmGain.connect(audio.master);
+
+        audio.sfxGain = audio.ctx.createGain();
+        audio.sfxGain.gain.value = 0.7;
+        audio.sfxGain.connect(audio.master);
+
+        startBgm();
+      }
+
+      function unlockAudio() {
+        if (!state.audioEnabled) return;
+        ensureAudio();
+        if (audio.ctx && audio.ctx.state === "suspended") {
+          audio.ctx.resume();
+        }
+      }
+
+      function startBgm() {
+        if (audio.timer) return;
+        audio.timer = setInterval(() => {
+          if (!state.audioEnabled || !audio.ctx) return;
+          const now = audio.ctx.currentTime;
+          const notes = audio.sequence[audio.step % audio.sequence.length];
+          notes.forEach((note, index) => {
+            const osc = audio.ctx.createOscillator();
+            const gain = audio.ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.value = note;
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+            osc.connect(gain).connect(audio.bgmGain);
+            osc.start(now + index * 0.02);
+            osc.stop(now + 0.75);
+          });
+          audio.step += 1;
+        }, 720);
+      }
+
+      function setAudioEnabled(enabled) {
+        state.audioEnabled = enabled;
+        updateSoundLabel();
+        if (!state.audioEnabled) {
+          if (audio.master) audio.master.gain.value = 0;
+          return;
+        }
+        ensureAudio();
+        if (audio.master) audio.master.gain.value = 0.6;
+      }
+
+      function playHitSound(strength) {
+        if (!audio.ctx || !state.audioEnabled) return;
+        const now = audio.ctx.currentTime;
+        const osc = audio.ctx.createOscillator();
+        const gain = audio.ctx.createGain();
+        const base = 220 + strength * 160;
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(base, now);
+        osc.frequency.exponentialRampToValueAtTime(base * 1.8, now + 0.08);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        osc.connect(gain).connect(audio.sfxGain);
+        osc.start(now);
+        osc.stop(now + 0.2);
       }
 
       function handleInput(delta) {
@@ -281,6 +380,7 @@
           ball.dy = Math.sin(angle);
           ball.speed = Math.min(ball.speed + 18, 660);
           ball.x = left.x + left.w + ball.r;
+          playHitSound(Math.min(0.3 + Math.abs(hit) * 0.7, 1));
         }
 
         if (
@@ -294,6 +394,7 @@
           ball.dy = Math.sin(angle);
           ball.speed = Math.min(ball.speed + 18, 660);
           ball.x = right.x - ball.r;
+          playHitSound(Math.min(0.3 + Math.abs(hit) * 0.7, 1));
         }
 
         if (ball.x < -40) {
@@ -391,6 +492,7 @@
 
       window.addEventListener("keydown", (event) => {
         keys.add(event.code);
+        unlockAudio();
         if (event.code === "Space") {
           if (
             state.leftScore < state.targetScore &&
@@ -404,6 +506,7 @@
           state.aiEnabled = !state.aiEnabled;
           modeEl.textContent = state.aiEnabled ? "1P" : "2P";
         }
+        if (event.code === "KeyM") setAudioEnabled(!state.audioEnabled);
       });
 
       window.addEventListener("keyup", (event) => {
@@ -411,8 +514,10 @@
       });
 
       window.addEventListener("resize", resize);
+      window.addEventListener("pointerdown", unlockAudio);
 
       resize();
+      updateSoundLabel();
       resetMatch();
       requestAnimationFrame(loop);
     </script>
